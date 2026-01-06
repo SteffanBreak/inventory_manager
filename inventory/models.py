@@ -8,8 +8,8 @@ class Supplier(models.Model):
         help_text="Average delivery time in days"
     )
 
-    # def __str__(self):
-    #     return self.name
+    def __str__(self):
+        return self.name
 
 
 class Product(models.Model):
@@ -19,8 +19,8 @@ class Product(models.Model):
     minimum_stock_level = models.PositiveIntegerField(default=10)
     suppliers = models.ManyToManyField(Supplier, related_name="products")
 
-    # def __str__(self):
-    #     return f"{self.name} ({self.sku})"
+    def __str__(self):
+        return f"{self.name} ({self.sku})"
 
 
 class ConsumptionLog(models.Model):
@@ -31,5 +31,5 @@ class ConsumptionLog(models.Model):
     date = models.DateField()
     notes = models.TextField(blank=True, null=True)
 
-    # def __str__(self):
-    #     return f"{self.product.name} - {self.quantity} on {self.date}"
+    def __str__(self):
+        return f"{self.product.name} - {self.quantity} on {self.date}"
