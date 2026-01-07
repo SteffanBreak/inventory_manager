@@ -51,16 +51,15 @@ class ProductDetailView(DetailView):
             df = df.sort_values("date")
             df.set_index("date", inplace=True)
             
-            # Resample to daily frequency
-            # TODO: Fix gap filling later
-            daily_df = df.resample('D').sum()
+            # Resample to daily frequency and fill 0 for missing days
+            # This makes the trend more accurate for daily consumption
+            daily_df = df.resample('D').sum().fillna(0)
 
             # Calculate average daily consumption (last 30 days or all)
             avg_daily_usage = daily_df["quantity"].mean()
 
             # Prediction
-            # Potential division by zero here if usage is 0
-            if avg_daily_usage != 0:
+            if avg_daily_usage > 0:
                 days_left = product.current_stock / avg_daily_usage
                 prediction_date = timezone.now().date() + timezone.timedelta(days=days_left)
                 context["prediction_date"] = prediction_date
