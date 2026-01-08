@@ -1,6 +1,7 @@
 import io
 import urllib
 import base64
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from django.views.generic import ListView, DetailView, CreateView, UpdateView
@@ -67,10 +68,20 @@ class ProductDetailView(DetailView):
 
             # Graph generation
             plt.figure(figsize=(10, 5))
-            plt.plot(daily_df.index, daily_df["quantity"], marker='o', linestyle='-')
+            plt.plot(daily_df.index, daily_df["quantity"], marker='o', linestyle='-', label='Consumption')
+            
+            # Trend Line
+            if len(daily_df) > 1:
+                x = np.arange(len(daily_df))
+                y = daily_df["quantity"].values
+                z = np.polyfit(x, y, 1)
+                p = np.poly1d(z)
+                plt.plot(daily_df.index, p(x), "r--", linewidth=2, label='Trend')
+
             plt.title('Daily Consumption Trend')
             plt.xlabel('Date')
             plt.ylabel('Quantity')
+            plt.legend()
             plt.grid(True)
             plt.tight_layout()
 
