@@ -1,0 +1,46 @@
+{% extends 'inventory/base.html' %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="text-3xl font-bold text-gray-800">Inventory Status</h1>
+</div>
+
+<div class="overflow-x-auto bg-white rounded-lg shadow overflow-y-auto relative">
+    <table class="border-collapse table-auto w-full whitespace-no-wrap bg-white table-striped relative">
+        <thead>
+            <tr class="text-left">
+                <th class="bg-gray-100 sticky top-0 border-b border-gray-200 px-6 py-2 text-gray-600 font-bold tracking-wider uppercase text-xs">Product</th>
+                <th class="bg-gray-100 sticky top-0 border-b border-gray-200 px-6 py-2 text-gray-600 font-bold tracking-wider uppercase text-xs">SKU</th>
+                <th class="bg-gray-100 sticky top-0 border-b border-gray-200 px-6 py-2 text-gray-600 font-bold tracking-wider uppercase text-xs">Stock</th>
+                <th class="bg-gray-100 sticky top-0 border-b border-gray-200 px-6 py-2 text-gray-600 font-bold tracking-wider uppercase text-xs">Status</th>
+                <th class="bg-gray-100 sticky top-0 border-b border-gray-200 px-6 py-2 text-gray-600 font-bold tracking-wider uppercase text-xs">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in products %}
+            <tr>
+                <td class="border-dashed border-t border-gray-200 px-6 py-3">{{ product.name }}</td>
+                <td class="border-dashed border-t border-gray-200 px-6 py-3">{{ product.sku }}</td>
+                <td class="border-dashed border-t border-gray-200 px-6 py-3">{{ product.current_stock }}</td>
+                <td class="border-dashed border-t border-gray-200 px-6 py-3">
+                    {% if product.current_stock <= product.minimum_stock_level %}
+                        <span class="text-red-500 font-bold">Low Stock</span>
+                    {% else %}
+                        <span class="text-green-500">OK</span>
+                    {% endif %}
+                </td>
+                <td class="border-dashed border-t border-gray-200 px-6 py-3">
+                    <a href="{% url 'product_detail' product.pk %}" class="text-teal-600 hover:text-teal-800 font-bold">Details</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-4">
+    <a href="{% url 'product_create' %}" class="bg-teal-500 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded">
+        Add New Product
+    </a>
+</div>
+{% endblock %}

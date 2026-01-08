@@ -1,0 +1,67 @@
+{% extends 'inventory/base.html' %}
+
+{% block content %}
+<div class="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-gray-800">{{ product.name }}</h1>
+        <div class="space-x-2">
+            <a href="{% url 'product_update' product.pk %}" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Edit</a>
+            <a href="{% url 'product_list' %}" class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">Back</a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+            <h2 class="text-xl font-bold mb-2">Details</h2>
+            <p><strong>SKU:</strong> {{ product.sku }}</p>
+            <p><strong>Current Stock:</strong> {{ product.current_stock }}</p>
+            <p><strong>Minimum Stock Level:</strong> {{ product.minimum_stock_level }}</p>
+            <p class="mt-2 text-sm text-gray-600">
+                <strong>Suppliers:</strong>
+                {% for supplier in product.suppliers.all %}
+                    {{ supplier.name }}{% if not forloop.last %}, {% endif %}
+                {% endfor %}
+            </p>
+        </div>
+        <div>
+           <h2 class="text-xl font-bold mb-2">Analysis</h2>
+           {% if graph %}
+               <div class="border p-2 rounded">
+                   <img src="data:image/png;base64,{{ graph }}" alt="Consumption Trend" class="w-full h-auto">
+               </div>
+               {% if prediction_date %}
+               <div class="mt-4 p-4 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700">
+                   <p class="font-bold">Prediction:</p>
+                   <p>Estimated stockout date: {{ prediction_date|date:"F j, Y" }}</p>
+                   <p>Days remaining: {{ days_remaining }}</p>
+               </div>
+               {% endif %}
+           {% else %}
+               <p class="text-gray-500">Not enough data for analysis.</p>
+           {% endif %}
+        </div>
+    </div>
+
+    <div class="mt-8">
+        <h2 class="text-2xl font-bold mb-4">Consumption History</h2>
+        <table class="min-w-full bg-white border">
+            <thead>
+                <tr>
+                    <th class="py-2 px-4 border-b">Date</th>
+                    <th class="py-2 px-4 border-b">Quantity</th>
+                    <th class="py-2 px-4 border-b">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in product.consumption_logs.all %}
+                <tr>
+                    <td class="py-2 px-4 border-b">{{ log.date }}</td>
+                    <td class="py-2 px-4 border-b">{{ log.quantity }}</td>
+                    <td class="py-2 px-4 border-b">{{ log.notes }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
