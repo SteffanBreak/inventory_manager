@@ -3,6 +3,8 @@ import urllib
 import base64
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Set backend to non-interactive to avoid thread issues
 import matplotlib.pyplot as plt
 from django.views.generic import ListView, DetailView, CreateView, UpdateView
 from django.urls import reverse_lazy
