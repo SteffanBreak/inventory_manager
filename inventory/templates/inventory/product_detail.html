@@ -23,20 +23,55 @@
                 {% endfor %}
             </p>
         </div>
-        <div>
-           <h2 class="text-xl font-bold mb-2">Analysis</h2>
+        
+        <!-- Expanded Grid for Graphs -->
+        <div class="col-span-1 md:col-span-2">
+           <h2 class="text-xl font-bold mb-4 mt-4">Analysis</h2>
+           
            {% if graph %}
-               <div class="border p-2 rounded mb-4">
-                   <h3 class="font-bold text-center mb-1">Consumption</h3>
-                   <img src="data:image/png;base64,{{ graph }}" alt="Consumption Trend" class="w-full h-auto">
+               <!-- Controls for Trend Models -->
+               <form method="get" class="mb-4 bg-gray-50 p-4 rounded border">
+                   <div class="flex flex-wrap gap-4 items-end">
+                       <div>
+                           <label class="block text-gray-700 text-sm font-bold mb-2">Consumption Model</label>
+                           <select name="consumption_model" class="shadow border rounded py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
+                               <option value="p1" {% if consumption_model == 'p1' %}selected{% endif %}>Linear (Default)</option>
+                               <option value="p2" {% if consumption_model == 'p2' %}selected{% endif %}>Polynomial (deg=2)</option>
+                           </select>
+                       </div>
+                       <div>
+                           <label class="block text-gray-700 text-sm font-bold mb-2">Stock Model</label>
+                           <select name="stock_model" class="shadow border rounded py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
+                               <option value="p1" {% if stock_model == 'p1' %}selected{% endif %}>Linear (Default)</option>
+                               <option value="p2" {% if stock_model == 'p2' %}selected{% endif %}>Polynomial (deg=2)</option>
+                           </select>
+                       </div>
+                       <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+                           Update Analysis
+                       </button>
+                   </div>
+               </form>
+
+               <!-- Grid for Side-by-Side Plots -->
+               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                   <div class="border p-2 rounded relative">
+                       <h3 class="font-bold text-center mb-1">Consumption</h3>
+                       {% if consumption_rmse %}
+                        <span class="absolute top-2 right-2 text-xs bg-gray-200 px-2 py-1 rounded">Error (RMSE): {{ consumption_rmse }}</span>
+                       {% endif %}
+                       <img src="data:image/png;base64,{{ graph }}" alt="Consumption Trend" class="w-full h-auto">
+                   </div>
+                   
+                   {% if stock_graph %}
+                   <div class="border p-2 rounded relative">
+                       <h3 class="font-bold text-center mb-1">Stock Level</h3>
+                       {% if stock_rmse %}
+                        <span class="absolute top-2 right-2 text-xs bg-gray-200 px-2 py-1 rounded">Error (RMSE): {{ stock_rmse }}</span>
+                       {% endif %}
+                       <img src="data:image/png;base64,{{ stock_graph }}" alt="Stock Level Trend" class="w-full h-auto">
+                   </div>
+                   {% endif %}
                </div>
-               
-               {% if stock_graph %}
-               <div class="border p-2 rounded">
-                   <h3 class="font-bold text-center mb-1">Stock Level</h3>
-                   <img src="data:image/png;base64,{{ stock_graph }}" alt="Stock Level Trend" class="w-full h-auto">
-               </div>
-               {% endif %}
 
                {% if prediction_date %}
                <div class="mt-4 p-4 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700">
