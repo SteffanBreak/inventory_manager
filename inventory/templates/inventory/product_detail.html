@@ -26,9 +26,18 @@
         <div>
            <h2 class="text-xl font-bold mb-2">Analysis</h2>
            {% if graph %}
-               <div class="border p-2 rounded">
+               <div class="border p-2 rounded mb-4">
+                   <h3 class="font-bold text-center mb-1">Consumption</h3>
                    <img src="data:image/png;base64,{{ graph }}" alt="Consumption Trend" class="w-full h-auto">
                </div>
+               
+               {% if stock_graph %}
+               <div class="border p-2 rounded">
+                   <h3 class="font-bold text-center mb-1">Stock Level</h3>
+                   <img src="data:image/png;base64,{{ stock_graph }}" alt="Stock Level Trend" class="w-full h-auto">
+               </div>
+               {% endif %}
+
                {% if prediction_date %}
                <div class="mt-4 p-4 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700">
                    <p class="font-bold">Prediction:</p>

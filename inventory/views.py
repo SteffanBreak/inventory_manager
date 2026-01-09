@@ -94,4 +94,39 @@ class ProductDetailView(DetailView):
             context["graph"] = uri
             plt.close()
 
+            # --- Second Plot: Quantity Remaining (Stock Level) ---
+            # Reconstruct historical stock levels
+            # Stock_End_Day_T = Start_Stock - Cumulative_Consumption_T
+            # Start_Stock = Current_Stock + Total_Consumption_In_Period
+            total_consumed = daily_df["quantity"].sum()
+            simulated_start_stock = product.current_stock + total_consumed
+            daily_df["stock_level"] = simulated_start_stock - daily_df["quantity"].cumsum()
+
+            plt.figure(figsize=(10, 5))
+            plt.plot(daily_df.index, daily_df["stock_level"], marker='s', linestyle='-', color='green', label='Stock Level')
+
+            # Stock Trend Line
+            if len(daily_df) > 1:
+                x = np.arange(len(daily_df))
+                y = daily_df["stock_level"].values
+                z = np.polyfit(x, y, 1)
+                p = np.poly1d(z)
+                plt.plot(daily_df.index, p(x), "r--", linewidth=2, label='Trend')
+
+            plt.title('Stock Level History (Simulated)')
+            plt.xlabel('Date')
+            plt.ylabel('Units Remaining')
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+
+            # Save second graph
+            buf2 = io.BytesIO()
+            plt.savefig(buf2, format='png')
+            buf2.seek(0)
+            string2 = base64.b64encode(buf2.read())
+            uri2 = urllib.parse.quote(string2)
+            context["stock_graph"] = uri2
+            plt.close()
+
         return context
