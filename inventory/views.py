@@ -46,9 +46,19 @@ class ProductDetailView(DetailView):
         # Get trend models from request parameters (default to 'linear')
         consumption_model = self.request.GET.get('consumption_model', 'p1') # p1 for polyfit deg 1
         stock_model = self.request.GET.get('stock_model', 'p1')
+        
+        # Advanced Preparation Settings
+        enable_smoothing = self.request.GET.get('enable_smoothing') == 'on'
+        smoothing_window = int(self.request.GET.get('smoothing_window', 3))
+        remove_outliers = self.request.GET.get('remove_outliers') == 'on'
+        outlier_threshold = float(self.request.GET.get('outlier_threshold', 2.0))
 
         context['consumption_model'] = consumption_model
         context['stock_model'] = stock_model
+        context['enable_smoothing'] = enable_smoothing
+        context['smoothing_window'] = smoothing_window
+        context['remove_outliers'] = remove_outliers
+        context['outlier_threshold'] = outlier_threshold
 
         if logs.exists():
             # Data preparation
@@ -63,6 +73,25 @@ class ProductDetailView(DetailView):
             
             # Resample to daily frequency and fill 0 for missing days
             daily_df = df.resample('D').sum().fillna(0)
+
+            # --- Advanced Data Pre-processing ---
+            # 1. Outlier Removal (Discard Excesses)
+            if remove_outliers and len(daily_df) > 5:
+                # Calculate Z-scores
+                mean = daily_df["quantity"].mean()
+                std = daily_df["quantity"].std()
+                if std > 0:
+                    z_scores = (daily_df["quantity"] - mean) / std
+                    # Replace outliers with NaN
+                    daily_df.loc[z_scores.abs() > outlier_threshold, "quantity"] = np.nan
+                    # Interpolate to fill gaps (linear interpolation)
+                    daily_df["quantity"] = daily_df["quantity"].interpolate()
+                    # Handle edge cases (if first/last indices were NaN)
+                    daily_df["quantity"] = daily_df["quantity"].fillna(method='bfill').fillna(method='ffill')
+
+            # 2. Smoothing (Rolling Average)
+            if enable_smoothing:
+                daily_df["quantity"] = daily_df["quantity"].rolling(window=smoothing_window, min_periods=1).mean()
 
             # Calculate average daily consumption
             avg_daily_usage = daily_df["quantity"].mean()
