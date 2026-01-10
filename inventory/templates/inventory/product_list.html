@@ -23,10 +23,12 @@
                 <td class="border-dashed border-t border-gray-200 px-6 py-3">{{ product.sku }}</td>
                 <td class="border-dashed border-t border-gray-200 px-6 py-3">{{ product.current_stock }}</td>
                 <td class="border-dashed border-t border-gray-200 px-6 py-3">
-                    {% if product.current_stock <= product.minimum_stock_level %}
-                        <span class="text-red-500 font-bold">Low Stock</span>
+                    {% if product.status_alert == 'critical' %}
+                        <span class="text-white bg-red-600 px-2 py-1 rounded font-bold text-xs uppercase">Restock ASAP ({{ product.days_left }} days)</span>
+                    {% elif product.status_alert == 'low' %}
+                        <span class="text-orange-500 font-bold">Low Level</span>
                     {% else %}
-                        <span class="text-green-500">OK</span>
+                        <span class="text-green-500 font-bold">OK</span>
                     {% endif %}
                 </td>
                 <td class="border-dashed border-t border-gray-200 px-6 py-3">

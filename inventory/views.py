@@ -6,9 +6,10 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Set backend to non-interactive to avoid thread issues
 import matplotlib.pyplot as plt
-from django.views.generic import ListView, DetailView, CreateView, UpdateView
-from django.urls import reverse_lazy
+from django.db.models import Sum, F, ExpressionWrapper, FloatField
+from django.core.paginator import Paginator
 from django.utils import timezone
+from datetime import timedelta
 from .models import Product, ConsumptionLog
 from .forms import ProductForm
 
@@ -32,6 +33,42 @@ class ProductListView(ListView):
     template_name = "inventory/product_list.html"
     context_object_name = "products"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Calculate status for each product
+        # Logic: Warning if days_remaining <= 7
+        
+        # This is a naive implementation (N+1 queries for aggregation)
+        # Optimized approach would use subqueries, but for this scale, interation is fine.
+        thirty_days_ago = timezone.now().date() - timedelta(days=30)
+        
+        for product in context['products']:
+            # Calculate average daily usage over last 30 days
+            total_usage = ConsumptionLog.objects.filter(
+                product=product, 
+                date__gte=thirty_days_ago
+            ).aggregate(Sum('quantity'))['quantity__sum'] or 0
+            
+            avg_daily = total_usage / 30.0
+            
+            if avg_daily > 0:
+                days_left = product.current_stock / avg_daily
+                product.days_left = int(days_left)
+                if days_left <= 7:
+                    product.status_alert = "critical" # < 7 days
+                elif product.current_stock <= product.minimum_stock_level:
+                    product.status_alert = "low" # Below min stock but maybe slow consumption
+                else:
+                     product.status_alert = "ok"
+            else:
+                 # No consumption data
+                 if product.current_stock <= product.minimum_stock_level:
+                     product.status_alert = "low"
+                 else:
+                     product.status_alert = "ok"
+                     
+        return context
+
 
 class ProductDetailView(DetailView):
     model = Product
@@ -41,6 +78,15 @@ class ProductDetailView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         product = self.get_object()
+        all_logs = product.consumption_logs.all().order_by("-date") # Newest first for table
+
+        # Pagination for Logs
+        paginator = Paginator(all_logs, 10) # 10 logs per page
+        page_number = self.request.GET.get('page')
+        page_obj = paginator.get_page(page_number)
+        context['page_obj'] = page_obj
+
+        # For analytics, we typically need ALL data, sorted by date asc
         logs = product.consumption_logs.all().order_by("date")
 
         # Get trend models from request parameters (default to 'linear')

@@ -25,18 +25,24 @@ class Command(BaseCommand):
 
         # Create Products
         products = []
-        names = ["Coffee Beans", "Milk", "Sugar", "Cups", "Napkins"]
-        for name in names:
-            p, created = Product.objects.get_or_create(
-                name=name,
-                defaults={
-                    "sku": f"SKU-{name.upper()[:3]}-{random.randint(100, 999)}",
-                    "current_stock": random.randint(20, 100),
-                    "minimum_stock_level": random.randint(10, 30),
-                },
-            )
-            p.suppliers.set(random.sample(suppliers, k=random.randint(1, 2)))
-            products.append(p)
+        categories = {
+            "GRO": ["Avocados", "Olive Oil", "Flour", "Eggs", "Cheese", "Bacon", "Lettuce"],
+            "BEV": ["Green Tea", "Black Tea", "Espresso Pods", "Syrup (Vanilla)", "Syrup (Caramel)", "Almond Milk"],
+            "SUP": ["Paper Towels", "Trash Bags", "Dish Soap", "Sponges", "Sanitizer", "Straws", "Lids"]
+        }
+        
+        for cat_code, items in categories.items():
+            for name in items:
+                p, created = Product.objects.get_or_create(
+                    name=name,
+                    defaults={
+                        "sku": f"SKU-{cat_code}-{name.replace(' ', '')[:4].upper()}-{random.randint(100, 999)}",
+                        "current_stock": random.randint(10, 150),
+                        "minimum_stock_level": random.randint(5, 20),
+                    },
+                )
+                p.suppliers.set(random.sample(suppliers, k=random.randint(1, 2)))
+                products.append(p)
 
         # Create Consumption Logs (Past 30 days)
         today = timezone.now().date()
