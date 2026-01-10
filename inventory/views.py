@@ -6,12 +6,14 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Set backend to non-interactive to avoid thread issues
 import matplotlib.pyplot as plt
-from django.db.models import Sum, F, ExpressionWrapper, FloatField
+from django.db.models import Sum, F, ExpressionWrapper, FloatField, Q
 from django.core.paginator import Paginator
 from django.utils import timezone
 from datetime import timedelta
 from .models import Product, ConsumptionLog
 from .forms import ProductForm
+from django.urls import reverse_lazy
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 
 
 class ProductCreateView(CreateView):
@@ -32,6 +34,16 @@ class ProductListView(ListView):
     model = Product
     template_name = "inventory/product_list.html"
     context_object_name = "products"
+    paginate_by = 10
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        query = self.request.GET.get('q')
+        if query:
+            queryset = queryset.filter(
+                Q(name__icontains=query) | Q(sku__icontains=query)
+            )
+        return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -42,6 +54,8 @@ class ProductListView(ListView):
         # Optimized approach would use subqueries, but for this scale, interation is fine.
         thirty_days_ago = timezone.now().date() - timedelta(days=30)
         
+        # Iterate over the paginated list, not the full queryset if possible, 
+        # but generic view context['products'] is the page slice when paginated.
         for product in context['products']:
             # Calculate average daily usage over last 30 days
             total_usage = ConsumptionLog.objects.filter(
