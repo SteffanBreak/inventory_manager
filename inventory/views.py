@@ -14,7 +14,7 @@ from .models import Product, ConsumptionLog
 from .forms import ProductForm
 from django.urls import reverse_lazy
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
-
+from django.core.cache import cache
 
 class ProductCreateView(CreateView):
     model = Product
@@ -57,29 +57,42 @@ class ProductListView(ListView):
         # Iterate over the paginated list, not the full queryset if possible, 
         # but generic view context['products'] is the page slice when paginated.
         for product in context['products']:
-            # Calculate average daily usage over last 30 days
-            total_usage = ConsumptionLog.objects.filter(
-                product=product, 
-                date__gte=thirty_days_ago
-            ).aggregate(Sum('quantity'))['quantity__sum'] or 0
-            
-            avg_daily = total_usage / 30.0
-            
-            if avg_daily > 0:
-                days_left = product.current_stock / avg_daily
-                product.days_left = int(days_left)
-                if days_left <= 7:
-                    product.status_alert = "critical" # < 7 days
-                elif product.current_stock <= product.minimum_stock_level:
-                    product.status_alert = "low" # Below min stock but maybe slow consumption
-                else:
-                     product.status_alert = "ok"
+            # Implement caching for status calculation
+            cache_key = f"product_status_{product.pk}"
+            status_data = cache.get(cache_key)
+
+            if status_data:
+                 product.days_left = status_data.get('days_left')
+                 product.status_alert = status_data.get('status_alert')
             else:
-                 # No consumption data
-                 if product.current_stock <= product.minimum_stock_level:
-                     product.status_alert = "low"
-                 else:
-                     product.status_alert = "ok"
+                # Calculate average daily usage over last 30 days
+                total_usage = ConsumptionLog.objects.filter(
+                    product=product, 
+                    date__gte=thirty_days_ago
+                ).aggregate(Sum('quantity'))['quantity__sum'] or 0
+                
+                avg_daily = total_usage / 30.0
+                
+                status_alert = "ok"
+                days_left = None
+
+                if avg_daily > 0:
+                    days_left = int(product.current_stock / avg_daily)
+                    if days_left <= 7:
+                        status_alert = "critical" # < 7 days
+                    elif product.current_stock <= product.minimum_stock_level:
+                        status_alert = "low" # Below min stock but maybe slow consumption
+                else:
+                    # No consumption data
+                    if product.current_stock <= product.minimum_stock_level:
+                        status_alert = "low"
+                
+                # Set calculate attributes
+                product.days_left = days_left
+                product.status_alert = status_alert
+                
+                # Cache the result for 5 minutes
+                cache.set(cache_key, {'days_left': days_left, 'status_alert': status_alert}, 300)
                      
         return context
 
@@ -153,15 +166,52 @@ class ProductDetailView(DetailView):
             if enable_smoothing:
                 daily_df["quantity"] = daily_df["quantity"].rolling(window=smoothing_window, min_periods=1).mean()
 
-            # Calculate average daily consumption
-            avg_daily_usage = daily_df["quantity"].mean()
+            # --- Calculate Stock History ---
+            total_consumed = daily_df["quantity"].sum()
+            simulated_start_stock = product.current_stock + total_consumed
+            daily_df["stock_level"] = simulated_start_stock - daily_df["quantity"].cumsum()
 
-            # Prediction logic
+            # Calculate average daily consumption (Naive Baseline)
+            avg_daily_usage = daily_df["quantity"].mean()
+            days_left_naive = 0
             if avg_daily_usage > 0:
-                days_left = product.current_stock / avg_daily_usage
-                prediction_date = timezone.now().date() + timezone.timedelta(days=days_left)
-                context["prediction_date"] = prediction_date
-                context["days_remaining"] = int(days_left)
+                days_left_naive = product.current_stock / avg_daily_usage
+
+            # Prediction logic using Stock Trend Model
+            days_left = days_left_naive # Default to naive
+            
+            if len(daily_df) > 1:
+                try:
+                    x = np.arange(len(daily_df))
+                    y_stock = daily_df["stock_level"].values
+                    deg = 2 if stock_model == 'p2' else 1
+                    
+                    z = np.polyfit(x, y_stock, deg)
+                    p = np.poly1d(z)
+                    
+                    # Find roots where stock = 0
+                    roots = p.roots
+                    real_roots = roots[np.isreal(roots)].real
+                    
+                    # Filter for roots in the future (greater than current last index)
+                    last_day_idx = len(daily_df) - 1
+                    future_roots = real_roots[real_roots > last_day_idx]
+                    
+                    if len(future_roots) > 0:
+                        # Take the earliest future date where stock hits 0
+                        target_idx = future_roots.min()
+                        days_left = target_idx - last_day_idx
+                    else:
+                        # If no crossing in future (e.g. slope up or never crossing), fallback or max out
+                        # For safety, keep naive if model fails to predict depletion
+                        pass
+                except Exception as e:
+                    print(f"Prediction Error: {e}")
+            
+            if days_left > 0:
+                 prediction_date = timezone.now().date() + timezone.timedelta(days=days_left)
+                 context["prediction_date"] = prediction_date
+                 context["days_remaining"] = int(days_left)
 
             def get_trend_poly(x, y, model_code):
                 deg = 2 if model_code == 'p2' else 1
@@ -194,6 +244,9 @@ class ProductDetailView(DetailView):
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
+            
+            # --- Min Stock Threshold Line ---
+            plt.axhline(y=product.minimum_stock_level, color='red', linestyle=':', linewidth=2, label=f'Min Level ({product.minimum_stock_level})')
 
             buf = io.BytesIO()
             plt.savefig(buf, format='png')
@@ -203,9 +256,7 @@ class ProductDetailView(DetailView):
             plt.close()
 
             # --- Graph 2: Stock Level ---
-            total_consumed = daily_df["quantity"].sum()
-            simulated_start_stock = product.current_stock + total_consumed
-            daily_df["stock_level"] = simulated_start_stock - daily_df["quantity"].cumsum()
+            # Stock history already calculated above as daily_df["stock_level"]
 
             plt.figure(figsize=(10, 5))
             plt.plot(daily_df.index, daily_df["stock_level"], marker='s', linestyle='-', color='green', label='Stock Level')
