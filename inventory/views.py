@@ -1,10 +1,9 @@
 import io
-import urllib
 import base64
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # Set backend to non-interactive to avoid thread issues
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from django.db.models import Sum, F, ExpressionWrapper, FloatField, Q
 from django.core.paginator import Paginator
@@ -14,7 +13,199 @@ from .models import Product, ConsumptionLog
 from .forms import ProductForm
 from django.urls import reverse_lazy
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
-from django.core.cache import cache
+
+
+def clean_data(df, remove_outliers=False, smoothing=False):
+    if df.empty:
+        return df
+    df = df.copy()
+    df["units_used"] = pd.to_numeric(df["units_used"], errors="coerce").fillna(0)
+    if remove_outliers and len(df) >= 4:
+        q1 = df["units_used"].quantile(0.25)
+        q3 = df["units_used"].quantile(0.75)
+        iqr = q3 - q1
+        low = q1 - 1.5 * iqr
+        high = q3 + 1.5 * iqr
+        df = df[(df["units_used"] >= low) & (df["units_used"] <= high)]
+    if smoothing and len(df) >= 3:
+        df["units_used"] = df["units_used"].rolling(window=3, min_periods=1).mean()
+    return df
+
+
+def get_trend_poly(x, y, degree):
+    coeffs = np.polyfit(x, y, degree)
+    p = np.poly1d(coeffs)
+    yhat = p(x)
+    rmse = np.sqrt(np.mean((y - yhat) ** 2))
+    return p, rmse
+
+
+class ProductListView(ListView):
+    model = Product
+    template_name = "inventory/product_list.html"
+    context_object_name = "products"
+    paginate_by = 10
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related("supplier")
+        supplier = self.request.GET.get("supplier")
+        status = self.request.GET.get("status")
+        if supplier:
+            qs = qs.filter(supplier__name__icontains=supplier)
+        if status == "ok":
+            qs = qs.filter(quantity_in_stock__gt=F("minimum_stock_level"))
+        elif status == "low":
+            qs = qs.filter(quantity_in_stock__gt=0, quantity_in_stock__lte=F("minimum_stock_level"))
+        elif status == "critical":
+            qs = qs.filter(quantity_in_stock__lte=0)
+        return qs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        products = context.get("products")
+        ok = 0
+        low = 0
+        critical = 0
+        if products is not None:
+            for p in products:
+                if p.quantity_in_stock <= 0:
+                    critical += 1
+                elif p.quantity_in_stock <= p.minimum_stock_level:
+                    low += 1
+                else:
+                    ok += 1
+        context["status_ok"] = ok
+        context["status_low"] = low
+        context["status_critical"] = critical
+        context["filter_supplier"] = self.request.GET.get("supplier", "")
+        context["filter_status"] = self.request.GET.get("status", "")
+        return context
+
+
+class ProductDetailView(DetailView):
+    model = Product
+    template_name = "inventory/product_detail.html"
+    context_object_name = "product"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        product = self.object
+
+        enable_outliers = self.request.GET.get("remove_outliers") == "1"
+        enable_smoothing = self.request.GET.get("enable_smoothing") == "1"
+        consumption_model = int(self.request.GET.get("consumption_model", 1))
+        stock_model = int(self.request.GET.get("stock_model", 1))
+
+        logs_qs = ConsumptionLog.objects.filter(product=product).order_by("-date")
+        paginator = Paginator(logs_qs, 10)
+        page_number = self.request.GET.get("page")
+        page_obj = paginator.get_page(page_number)
+
+        context["page_obj"] = page_obj
+        context["remove_outliers"] = "1" if enable_outliers else "0"
+        context["enable_smoothing"] = "1" if enable_smoothing else "0"
+        context["consumption_model"] = consumption_model
+        context["stock_model"] = stock_model
+
+        df = pd.DataFrame(list(logs_qs.values("date", "units_used")))
+        if not df.empty:
+            df = df.sort_values("date")
+            df = clean_data(df, remove_outliers=enable_outliers, smoothing=enable_smoothing)
+        context["has_data"] = not df.empty
+
+        if not df.empty:
+            df["x"] = (df["date"] - df["date"].min()).dt.days.astype(float)
+            x = df["x"].values
+            y = df["units_used"].values.astype(float)
+
+            try:
+                p, rmse = get_trend_poly(x, y, consumption_model)
+            except Exception:
+                p, rmse = get_trend_poly(x, y, 1)
+
+            context["rmse_consumption"] = float(rmse)
+
+            days_to_predict = 30
+            x_future = np.arange(0, max(x.max(), 1) + days_to_predict + 1, 1)
+            y_pred = p(x_future)
+
+            y_pred = np.clip(y_pred, 0, None)
+
+            plt.figure(figsize=(10, 4))
+            plt.plot(df["date"], y, marker="o", label="Consumption")
+            future_dates = [df["date"].min() + timedelta(days=int(d)) for d in x_future]
+            plt.plot(future_dates, y_pred, label="Trend")
+            plt.title("Consumption Trend")
+            plt.xlabel("Date")
+            plt.ylabel("Units Used")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            buf.seek(0)
+            string = base64.b64encode(buf.read())
+            context["graph"] = string.decode()
+            plt.close()
+
+            avg_daily = float(np.mean(y)) if len(y) else 0.0
+            if avg_daily > 0:
+                days_left = int(product.quantity_in_stock / avg_daily) if product.quantity_in_stock > 0 else 0
+            else:
+                days_left = None
+
+            context["avg_daily_consumption"] = round(avg_daily, 2)
+            context["days_left"] = days_left
+
+            if days_left is not None:
+                prediction_date = timezone.now().date() + timedelta(days=days_left)
+            else:
+                prediction_date = None
+            context["prediction_date"] = prediction_date
+
+            df2 = df.copy()
+            df2 = df2.sort_values("date")
+            df2["x"] = (df2["date"] - df2["date"].min()).dt.days.astype(float)
+            x2 = df2["x"].values
+            stock = []
+            remaining = product.quantity_in_stock
+            for u in df2["units_used"].values:
+                remaining = remaining - float(u)
+                stock.append(remaining)
+            stock = np.array(stock, dtype=float)
+
+            try:
+                p2, rmse2 = get_trend_poly(x2, stock, stock_model)
+            except Exception:
+                p2, rmse2 = get_trend_poly(x2, stock, 1)
+
+            context["rmse_stock"] = float(rmse2)
+
+            x_future2 = np.arange(0, max(x2.max(), 1) + days_to_predict + 1, 1)
+            stock_pred = p2(x_future2)
+
+            plt.figure(figsize=(10, 4))
+            plt.plot(df2["date"], stock, marker="o", label="Stock (calculated)")
+            future_dates2 = [df2["date"].min() + timedelta(days=int(d)) for d in x_future2]
+            plt.plot(future_dates2, stock_pred, label="Trend")
+            plt.axhline(float(product.minimum_stock_level), linestyle="--", label="Minimum stock level")
+            plt.title("Stock Level Trend")
+            plt.xlabel("Date")
+            plt.ylabel("Units Remaining")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+
+            buf2 = io.BytesIO()
+            plt.savefig(buf2, format="png")
+            buf2.seek(0)
+            string2 = base64.b64encode(buf2.read())
+            context["stock_graph"] = string2.decode()
+            plt.close()
+
+        return context
+
 
 class ProductCreateView(CreateView):
     model = Product
@@ -30,259 +221,7 @@ class ProductUpdateView(UpdateView):
     success_url = reverse_lazy("product_list")
 
 
-class ProductListView(ListView):
+class ProductDeleteView(DeleteView):
     model = Product
-    template_name = "inventory/product_list.html"
-    context_object_name = "products"
-    paginate_by = 10
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        query = self.request.GET.get('q')
-        if query:
-            queryset = queryset.filter(
-                Q(name__icontains=query) | Q(sku__icontains=query)
-            )
-        return queryset.order_by('name')
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # Calculate status for each product
-        # Logic: Warning if days_remaining <= 7
-        
-        # This is a naive implementation (N+1 queries for aggregation)
-        # Optimized approach would use subqueries, but for this scale, interation is fine.
-        thirty_days_ago = timezone.now().date() - timedelta(days=30)
-        
-        # Iterate over the paginated list, not the full queryset if possible, 
-        # but generic view context['products'] is the page slice when paginated.
-        for product in context['products']:
-            # Implement caching for status calculation
-            cache_key = f"product_status_{product.pk}"
-            status_data = cache.get(cache_key)
-
-            if status_data:
-                 product.days_left = status_data.get('days_left')
-                 product.status_alert = status_data.get('status_alert')
-            else:
-                # Calculate average daily usage over last 30 days
-                total_usage = ConsumptionLog.objects.filter(
-                    product=product, 
-                    date__gte=thirty_days_ago
-                ).aggregate(Sum('quantity'))['quantity__sum'] or 0
-                
-                avg_daily = total_usage / 30.0
-                
-                status_alert = "ok"
-                days_left = None
-
-                if avg_daily > 0:
-                    days_left = int(product.current_stock / avg_daily)
-                    if days_left <= 7:
-                        status_alert = "critical" # < 7 days
-                    elif product.current_stock <= product.minimum_stock_level:
-                        status_alert = "low" # Below min stock but maybe slow consumption
-                else:
-                    # No consumption data
-                    if product.current_stock <= product.minimum_stock_level:
-                        status_alert = "low"
-                
-                # Set calculate attributes
-                product.days_left = days_left
-                product.status_alert = status_alert
-                
-                # Cache the result for 5 minutes
-                cache.set(cache_key, {'days_left': days_left, 'status_alert': status_alert}, 300)
-                     
-        return context
-
-
-class ProductDetailView(DetailView):
-    model = Product
-    template_name = "inventory/product_detail.html"
-    context_object_name = "product"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        product = self.get_object()
-        all_logs = product.consumption_logs.all().order_by("-date") # Newest first for table
-
-        # Pagination for Logs
-        paginator = Paginator(all_logs, 10) # 10 logs per page
-        page_number = self.request.GET.get('page')
-        page_obj = paginator.get_page(page_number)
-        context['page_obj'] = page_obj
-
-        # For analytics, we typically need ALL data, sorted by date asc
-        logs = product.consumption_logs.all().order_by("date")
-
-        # Get trend models from request parameters (default to 'linear')
-        consumption_model = self.request.GET.get('consumption_model', 'p1') # p1 for polyfit deg 1
-        stock_model = self.request.GET.get('stock_model', 'p1')
-        
-        # Advanced Preparation Settings
-        enable_smoothing = self.request.GET.get('enable_smoothing') == 'on'
-        smoothing_window = int(self.request.GET.get('smoothing_window', 3))
-        remove_outliers = self.request.GET.get('remove_outliers') == 'on'
-        outlier_threshold = float(self.request.GET.get('outlier_threshold', 2.0))
-
-        context['consumption_model'] = consumption_model
-        context['stock_model'] = stock_model
-        context['enable_smoothing'] = enable_smoothing
-        context['smoothing_window'] = smoothing_window
-        context['remove_outliers'] = remove_outliers
-        context['outlier_threshold'] = outlier_threshold
-
-        if logs.exists():
-            # Data preparation
-            data = {
-                "date": [log.date for log in logs],
-                "quantity": [log.quantity for log in logs],
-            }
-            df = pd.DataFrame(data)
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date")
-            df.set_index("date", inplace=True)
-            
-            # Resample to daily frequency and fill 0 for missing days
-            daily_df = df.resample('D').sum().fillna(0)
-
-            # --- Advanced Data Pre-processing ---
-            # 1. Outlier Removal (Discard Excesses)
-            if remove_outliers and len(daily_df) > 5:
-                # Calculate Z-scores
-                mean = daily_df["quantity"].mean()
-                std = daily_df["quantity"].std()
-                if std > 0:
-                    z_scores = (daily_df["quantity"] - mean) / std
-                    # Replace outliers with NaN
-                    daily_df.loc[z_scores.abs() > outlier_threshold, "quantity"] = np.nan
-                    # Interpolate to fill gaps (linear interpolation)
-                    daily_df["quantity"] = daily_df["quantity"].interpolate()
-                    # Handle edge cases (if first/last indices were NaN)
-                    daily_df["quantity"] = daily_df["quantity"].fillna(method='bfill').fillna(method='ffill')
-
-            # 2. Smoothing (Rolling Average)
-            if enable_smoothing:
-                daily_df["quantity"] = daily_df["quantity"].rolling(window=smoothing_window, min_periods=1).mean()
-
-            # --- Calculate Stock History ---
-            total_consumed = daily_df["quantity"].sum()
-            simulated_start_stock = product.current_stock + total_consumed
-            daily_df["stock_level"] = simulated_start_stock - daily_df["quantity"].cumsum()
-
-            # Calculate average daily consumption (Naive Baseline)
-            avg_daily_usage = daily_df["quantity"].mean()
-            days_left_naive = 0
-            if avg_daily_usage > 0:
-                days_left_naive = product.current_stock / avg_daily_usage
-
-            # Prediction logic using Stock Trend Model
-            days_left = days_left_naive # Default to naive
-            
-            if len(daily_df) > 1:
-                try:
-                    x = np.arange(len(daily_df))
-                    y_stock = daily_df["stock_level"].values
-                    deg = 2 if stock_model == 'p2' else 1
-                    
-                    z = np.polyfit(x, y_stock, deg)
-                    p = np.poly1d(z)
-                    
-                    # Find roots where stock = 0
-                    roots = p.roots
-                    real_roots = roots[np.isreal(roots)].real
-                    
-                    # Filter for roots in the future (greater than current last index)
-                    last_day_idx = len(daily_df) - 1
-                    future_roots = real_roots[real_roots > last_day_idx]
-                    
-                    if len(future_roots) > 0:
-                        # Take the earliest future date where stock hits 0
-                        target_idx = future_roots.min()
-                        days_left = target_idx - last_day_idx
-                    else:
-                        # If no crossing in future (e.g. slope up or never crossing), fallback or max out
-                        # For safety, keep naive if model fails to predict depletion
-                        pass
-                except Exception as e:
-                    print(f"Prediction Error: {e}")
-            
-            if days_left > 0:
-                 prediction_date = timezone.now().date() + timezone.timedelta(days=days_left)
-                 context["prediction_date"] = prediction_date
-                 context["days_remaining"] = int(days_left)
-
-            def get_trend_poly(x, y, model_code):
-                deg = 2 if model_code == 'p2' else 1
-                try:
-                    z = np.polyfit(x, y, deg)
-                    p = np.poly1d(z)
-                    y_pred = p(x)
-                    rmse = np.sqrt(np.mean((y - y_pred)**2))
-                    return p(x), rmse
-                except Exception:
-                    return None, None
-
-            # --- Graph 1: Consumption ---
-            plt.figure(figsize=(10, 5))
-            plt.plot(daily_df.index, daily_df["quantity"], marker='o', linestyle='-', label='Consumption')
-            
-            if len(daily_df) > 1:
-                x = np.arange(len(daily_df))
-                y = daily_df["quantity"].values
-                trend_y, rmse = get_trend_poly(x, y, consumption_model)
-                
-                if trend_y is not None:
-                    label = f'Trend ({consumption_model}, RMSE={rmse:.2f})'
-                    plt.plot(daily_df.index, trend_y, "r--", linewidth=2, label=label)
-                    context['consumption_rmse'] = round(rmse, 2)
-
-            plt.title('Daily Consumption Trend')
-            plt.xlabel('Date')
-            plt.ylabel('Quantity')
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
-            
-            # --- Min Stock Threshold Line ---
-            plt.axhline(y=product.minimum_stock_level, color='red', linestyle=':', linewidth=2, label=f'Min Level ({product.minimum_stock_level})')
-
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            string = base64.b64encode(buf.read())
-            context["graph"] = urllib.parse.quote(string)
-            plt.close()
-
-            # --- Graph 2: Stock Level ---
-            # Stock history already calculated above as daily_df["stock_level"]
-
-            plt.figure(figsize=(10, 5))
-            plt.plot(daily_df.index, daily_df["stock_level"], marker='s', linestyle='-', color='green', label='Stock Level')
-
-            if len(daily_df) > 1:
-                x = np.arange(len(daily_df))
-                y = daily_df["stock_level"].values
-                trend_y, rmse = get_trend_poly(x, y, stock_model)
-                
-                if trend_y is not None:
-                     label = f'Trend ({stock_model}, RMSE={rmse:.2f})'
-                     plt.plot(daily_df.index, trend_y, "r--", linewidth=2, label=label)
-                     context['stock_rmse'] = round(rmse, 2)
-
-            plt.title('Stock Level History (Simulated)')
-            plt.xlabel('Date')
-            plt.ylabel('Units Remaining')
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
-
-            buf2 = io.BytesIO()
-            plt.savefig(buf2, format='png')
-            buf2.seek(0)
-            string2 = base64.b64encode(buf2.read())
-            context["stock_graph"] = urllib.parse.quote(string2)
-            plt.close()
-
-        return context
+    template_name = "inventory/product_confirm_delete.html"
+    success_url = reverse_lazy("product_list")
